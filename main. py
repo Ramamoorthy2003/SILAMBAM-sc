@@ -1,0 +1,746 @@
+"""
+Electronic Silambam - Scoreboard App (Kivy / Android version)
+============================================================================
+Player A = RED   |   Player B = BLUE
+
+  - Fullscreen, landscape-only (locked via buildozer.spec orientation=landscape)
+  - Scoring is LINKED to the timer: touches/penalties only count while the
+    round timer is running.
+  - Tapping ANYWHERE inside a player's box registers a +1 touch for that
+    player and flashes the box in that player's colour. It does NOT pause.
+  - Tapping ANYWHERE ELSE on screen (outside the two player boxes) pauses
+    the round while it is running, and shows a big centered RESUME popup.
+  - Round 1 starts manually (press START). When a round ends, the score
+    popup shows, then a short "ROUND N" announcement appears, then the
+    next round begins automatically - no need to press START again.
+    Same behaviour applies to the round-3 decider.
+  - Touch and penalty presses play short beep sounds; the round timer
+    running out also plays a distinct sound.
+  - 2 rounds normally. If tied after round 2, round 3 (decider) is added.
+  - "New Match" resets everything completely.
+  - ESP32 boards can send touch signals over WiFi (TCP socket, port 5005) -
+    score updates automatically (only while the timer is running), same as
+    pressing the on-screen button. Message format: "A:HIT" / "B:PENALTY".
+"""
+
+import socket
+import threading
+import queue
+import os
+import wave
+import struct
+import math
+
+from kivy.app import App
+from kivy.core.window import Window
+from kivy.core.audio import SoundLoader
+from kivy.clock import Clock
+from kivy.animation import Animation
+from kivy.graphics import Color, Rectangle, Line, RoundedRectangle
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.widget import Widget
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
+from kivy.metrics import sp, dp
+from kivy.config import Config
+
+Config.set("graphics", "fullscreen", "auto")
+Config.set("kivy", "exit_on_escape", "0")
+
+# ---------------- Fixed settings ----------------
+DEFAULT_ROUND_SECONDS = 60
+HIT_POINTS = 1
+PENALTY_POINTS = 1
+MAX_ROUNDS_NORMAL = 2
+DECIDER_ROUND = 3
+SERVER_PORT = 5005
+ROUND_START_POPUP_SECONDS = 1.4
+
+# ---------------- Theme ----------------
+BG = (11 / 255, 14 / 255, 20 / 255, 1)
+PANEL_BG = (20 / 255, 26 / 255, 36 / 255, 1)
+CARD_BG = (26 / 255, 33 / 255, 48 / 255, 1)
+RED = (192 / 255, 57 / 255, 43 / 255, 1)
+BLUE = (31 / 255, 111 / 255, 235 / 255, 1)
+GOLD = (227 / 255, 178 / 255, 60 / 255, 1)
+TEXT = (245 / 255, 245 / 255, 245 / 255, 1)
+MUTED = (124 / 255, 135 / 255, 151 / 255, 1)
+GREEN = (47 / 255, 158 / 255, 92 / 255, 1)
+ORANGE = (199 / 255, 106 / 255, 26 / 255, 1)
+GREY = (42 / 255, 49 / 255, 64 / 255, 1)
+PENALTY_FLASH = (0.85, 0.18, 0.18, 1)
+
+
+def bg_rect(widget, color):
+    """Give any widget a solid background colour that tracks size/pos."""
+    with widget.canvas.before:
+        Color(*color)
+        widget._bg = Rectangle(pos=widget.pos, size=widget.size)
+    widget.bind(pos=lambda w, v: setattr(w._bg, "pos", v),
+                size=lambda w, v: setattr(w._bg, "size", v))
+
+
+def bordered(widget, color, width=2):
+    with widget.canvas.after:
+        Color(*color)
+        widget._border = Line(rectangle=(0, 0, 0, 0), width=width)
+
+    def _upd(w, *_):
+        w._border.rectangle = (w.x, w.y, w.width, w.height)
+
+    widget.bind(pos=_upd, size=_upd)
+
+
+def write_beep(path, freq=880.0, duration=0.15, volume=0.55, sample_rate=22050):
+    """Synthesize a short sine-wave beep to a .wav file (no external assets needed)."""
+    n_samples = int(sample_rate * duration)
+    attack = max(1, int(0.05 * n_samples))
+    release = max(1, int(0.25 * n_samples))
+    with wave.open(path, "w") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(sample_rate)
+        frames = bytearray()
+        for i in range(n_samples):
+            t = i / sample_rate
+            if i < attack:
+                env = i / attack
+            elif i > n_samples - release:
+                env = max(0.0, (n_samples - i) / release)
+            else:
+                env = 1.0
+            value = int(volume * 32767 * math.sin(2 * math.pi * freq * t) * env)
+            frames += struct.pack("<h", value)
+        f.writeframes(bytes(frames))
+
+
+class PillButton(Button):
+    """A flat button with rounded corners for a cleaner, more premium look."""
+
+    def __init__(self, fill_color=GOLD, radius=16, **kw):
+        super().__init__(**kw)
+        self.background_normal = ""
+        self.background_down = ""
+        self.background_color = (0, 0, 0, 0)
+        with self.canvas.before:
+            self._color_instr = Color(*fill_color)
+            self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(radius)])
+        self.bind(pos=self._sync, size=self._sync)
+
+    def _sync(self, *_):
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+
+    def set_fill(self, color):
+        self._color_instr.rgba = color
+
+
+# ================================================================ widgets
+class PlayerPanel(BoxLayout):
+    def __init__(self, app, key, name, color_word, color, **kw):
+        super().__init__(orientation="vertical", padding=dp(16), spacing=dp(6), **kw)
+        self.app = app
+        self.key = key
+        self.color = color
+        bg_rect(self, PANEL_BG)
+        bordered(self, color)
+
+        accent = BoxLayout(size_hint=(1, None), height=dp(6))
+        bg_rect(accent, color)
+        self.add_widget(accent)
+
+        self.add_widget(Label(text=name, bold=True, font_size=sp(22), color=TEXT,
+                               size_hint=(1, None), height=dp(34)))
+        self.add_widget(Label(text=color_word, bold=True, font_size=sp(15), color=color,
+                               size_hint=(1, None), height=dp(22)))
+
+        self.score_lbl = Label(text="0", bold=True, font_size=sp(66), color=TEXT)
+        self.add_widget(self.score_lbl)
+
+        self.penalty_lbl = Label(text="", bold=True, font_size=sp(14), color=PENALTY_FLASH,
+                                  size_hint=(1, None), height=dp(20))
+        self.add_widget(self.penalty_lbl)
+
+        self.touch_btn = Button(text="TOUCH  +1", bold=True, font_size=sp(20),
+                                 background_normal="", background_color=color,
+                                 color=(1, 1, 1, 1), size_hint=(1, None), height=dp(56))
+        self.touch_btn.bind(on_release=lambda *_: app.register_hit(key))
+        self.add_widget(self.touch_btn)
+
+        self.pen_btn = Button(text="PENALTY  -1", bold=True, font_size=sp(15),
+                               background_normal="", background_color=PANEL_BG,
+                               color=color, size_hint=(1, None), height=dp(44))
+        self.pen_btn.bind(on_release=lambda *_: app.register_penalty(key))
+        self.add_widget(self.pen_btn)
+
+        # flash overlay - sits on top of everything, used to pulse the
+        # whole box in colour when a hit or penalty is registered
+        self.flash_overlay = Widget(opacity=0)
+        with self.flash_overlay.canvas:
+            self._flash_color = Color(*color)
+            self._flash_rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync_flash, size=self._sync_flash)
+        self.add_widget(self.flash_overlay)
+
+    def _sync_flash(self, *_):
+        self._flash_rect.pos = self.pos
+        self._flash_rect.size = self.size
+
+    def flash(self, color=None):
+        self._flash_color.rgba = color if color else self.color
+        self.flash_overlay.opacity = 0
+        anim = Animation(opacity=0.45, duration=0.07) + Animation(opacity=0, duration=0.28)
+        anim.start(self.flash_overlay)
+
+    def on_touch_down(self, touch):
+        # let the TOUCH / PENALTY buttons handle their own taps normally
+        if self.touch_btn.collide_point(*touch.pos) or self.pen_btn.collide_point(*touch.pos):
+            return super().on_touch_down(touch)
+        if self.collide_point(*touch.pos):
+            # tapping ANYWHERE else inside this box scores a touch for this
+            # player and must NOT pause the round
+            self.app.register_hit(self.key)
+            return True
+        return super().on_touch_down(touch)
+
+    def set_score(self, val):
+        self.score_lbl.text = str(val)
+
+    def set_penalties(self, val):
+        self.penalty_lbl.text = f"Penalties: {val}" if val else ""
+
+
+class CenterPanel(BoxLayout):
+    def __init__(self, app, **kw):
+        super().__init__(orientation="vertical", padding=dp(10), spacing=dp(6), **kw)
+        self.app = app
+
+        self.round_lbl = Label(text="ROUND 1", bold=True, font_size=sp(18), color=GOLD,
+                                size_hint=(1, None), height=dp(28))
+        self.add_widget(self.round_lbl)
+
+        self.timer_lbl = Label(text="01:00", bold=True, font_size=sp(64), color=TEXT,
+                                size_hint=(1, None), height=dp(90))
+        self.add_widget(self.timer_lbl)
+
+        self.status_lbl = Label(text="Press START to begin scoring", italic=True,
+                                 font_size=sp(13), color=MUTED, size_hint=(1, None), height=dp(24))
+        self.add_widget(self.status_lbl)
+
+        self.primary_btn = PillButton(text="START", bold=True, font_size=sp(24),
+                                       fill_color=GREEN, color=(1, 1, 1, 1),
+                                       size_hint=(1, None), height=dp(64))
+        self.primary_btn.bind(on_release=lambda *_: app.start_timer())
+        self.add_widget(self.primary_btn)
+
+        self.controls = BoxLayout(orientation="vertical", spacing=dp(6),
+                                   size_hint=(1, None), height=dp(96))
+        self.end_btn = PillButton(text="End Round", bold=True, font_size=sp(15),
+                                   fill_color=GOLD, color=(0, 0, 0, 1),
+                                   size_hint=(1, None), height=dp(44))
+        self.end_btn.bind(on_release=lambda *_: app.end_round())
+        self.new_btn = PillButton(text="NEW MATCH (Full Reset)", bold=True, font_size=sp(13),
+                                   fill_color=RED, color=(1, 1, 1, 1),
+                                   size_hint=(1, None), height=dp(44))
+        self.new_btn.bind(on_release=lambda *_: app.new_match())
+        self.controls.add_widget(self.end_btn)
+        self.controls.add_widget(self.new_btn)
+        self.add_widget(self.controls)
+
+        self.net_lbl = Label(text="ESP32 server: starting...", font_size=sp(11), color=MUTED,
+                              size_hint=(1, None), height=dp(20))
+        self.add_widget(self.net_lbl)
+
+        self.add_widget(BoxLayout())  # spacer
+
+    def on_touch_down(self, touch):
+        # tapping the CENTER background (not a button) pauses the round
+        if self.collide_point(*touch.pos):
+            for b in (self.primary_btn, self.end_btn, self.new_btn):
+                if b.collide_point(*touch.pos):
+                    return super().on_touch_down(touch)
+            self.app.on_board_tap()
+            return True
+        return super().on_touch_down(touch)
+
+
+class RootLayout(FloatLayout):
+    """Root screen. Any tap that isn't consumed by a child (player boxes,
+    center panel buttons, settings gear) falls through to here - which
+    means tapping empty space (title bar, margins) also pauses/resumes,
+    matching 'tap anywhere except the two player boxes'."""
+    app_ref = None
+
+    def on_touch_down(self, touch):
+        if super().on_touch_down(touch):
+            return True
+        if self.app_ref is not None:
+            self.app_ref.on_board_tap()
+        return True
+
+
+# =================================================================== app
+class SilambamApp(App):
+    def build(self):
+        Window.clearcolor = BG
+        self.round_seconds = DEFAULT_ROUND_SECONDS
+        self.round_no = 1
+        self.time_left = self.round_seconds
+        self.timer_running = False
+        self.timer_ev = None
+        self.round_scores = {"A": [], "B": []}
+        self.penalties = {"A": 0, "B": 0}
+        self.score = {"A": 0, "B": 0}
+        self.match_over = False
+        self.ui_state = "idle"
+        self._pause_popup = None
+
+        self.esp_queue = queue.Queue()
+        self.connected_devices = 0
+
+        self._setup_sounds()
+
+        root = RootLayout()
+        root.app_ref = self
+        bg_rect(root, BG)
+
+        title_box = BoxLayout(orientation="vertical", size_hint=(1, None), height=dp(70),
+                               pos_hint={"top": 1})
+        title_box.add_widget(Label(text="SILAMBAM", bold=True, font_size=sp(30), color=TEXT,
+                                    size_hint=(1, None), height=dp(38)))
+        title_box.add_widget(Label(text="ELECTRONIC SCOREBOARD", font_size=sp(13), color=GOLD,
+                                    size_hint=(1, None), height=dp(20)))
+        root.add_widget(title_box)
+
+        main_row = BoxLayout(orientation="horizontal", spacing=dp(14),
+                              padding=[dp(14), dp(74), dp(14), dp(14)], size_hint=(1, 1))
+        self.panel_a = PlayerPanel(self, "A", "PLAYER A", "RED", RED, size_hint=(0.32, 1))
+        self.center = CenterPanel(self, size_hint=(0.36, 1))
+        self.panel_b = PlayerPanel(self, "B", "PLAYER B", "BLUE", BLUE, size_hint=(0.32, 1))
+        main_row.add_widget(self.panel_a)
+        main_row.add_widget(self.center)
+        main_row.add_widget(self.panel_b)
+        root.add_widget(main_row)
+
+        gear = Button(text="\u2699", font_size=sp(20), background_normal="",
+                      background_color=GREY, color=TEXT, size_hint=(None, None),
+                      size=(dp(40), dp(40)), pos_hint={"right": 0.99, "top": 0.99})
+        gear.bind(on_release=lambda *_: self.open_settings())
+        root.add_widget(gear)
+
+        self.set_ui_state("idle")
+        self.start_esp32_server()
+        Clock.schedule_interval(self.poll_esp32_queue, 0.1)
+        return root
+
+    # ---------------------------------------------------------- sounds
+    def _setup_sounds(self):
+        try:
+            data_dir = self.user_data_dir
+        except Exception:
+            data_dir = "."
+        os.makedirs(data_dir, exist_ok=True)
+        touch_path = os.path.join(data_dir, "touch.wav")
+        penalty_path = os.path.join(data_dir, "penalty.wav")
+        timeup_path = os.path.join(data_dir, "timeup.wav")
+        try:
+            if not os.path.exists(touch_path):
+                write_beep(touch_path, freq=1050, duration=0.09, volume=0.6)
+            if not os.path.exists(penalty_path):
+                write_beep(penalty_path, freq=300, duration=0.14, volume=0.6)
+            if not os.path.exists(timeup_path):
+                write_beep(timeup_path, freq=440, duration=0.35, volume=0.65)
+        except Exception:
+            pass
+        self.touch_sound = SoundLoader.load(touch_path) if os.path.exists(touch_path) else None
+        self.penalty_sound = SoundLoader.load(penalty_path) if os.path.exists(penalty_path) else None
+        self.timeup_sound = SoundLoader.load(timeup_path) if os.path.exists(timeup_path) else None
+
+    def _play(self, sound):
+        try:
+            if sound:
+                sound.stop()
+                sound.play()
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------- scoring
+    def register_hit(self, key):
+        if self.match_over or not self.timer_running:
+            return
+        self.score[key] += HIT_POINTS
+        self.refresh_scores()
+        panel = self.panel_a if key == "A" else self.panel_b
+        panel.flash()
+        self._play(self.touch_sound)
+
+    def register_penalty(self, key):
+        if self.match_over or not self.timer_running:
+            return
+        self.score[key] = max(0, self.score[key] - PENALTY_POINTS)
+        self.penalties[key] += 1
+        self.refresh_scores()
+        panel = self.panel_a if key == "A" else self.panel_b
+        panel.set_penalties(self.penalties[key])
+        panel.flash(color=PENALTY_FLASH)
+        self._play(self.penalty_sound)
+
+    def refresh_scores(self):
+        self.panel_a.set_score(self.score["A"])
+        self.panel_b.set_score(self.score["B"])
+
+    # ---------------------------------------------------------- ui state
+    def on_board_tap(self):
+        if self.timer_running:
+            self.pause_timer()
+            self.show_pause_popup()
+
+    def set_ui_state(self, state):
+        self.ui_state = state
+        c = self.center
+        if state == "idle":
+            c.status_lbl.text = "Press START to begin scoring"
+            c.primary_btn.text = "START"
+            c.primary_btn.set_fill(GREEN)
+            c.primary_btn.opacity = 1
+            c.primary_btn.disabled = False
+            c.controls.opacity = 0
+            c.controls.disabled = True
+            self.panel_a.opacity = 0
+            self.panel_b.opacity = 0
+        elif state == "running":
+            c.status_lbl.text = "Tap anywhere outside the two boxes to pause"
+            c.primary_btn.opacity = 0
+            c.primary_btn.disabled = True
+            c.controls.opacity = 1
+            c.controls.disabled = False
+            self.panel_a.opacity = 1
+            self.panel_b.opacity = 1
+
+    # ---------------------------------------------------------- pause / resume popup
+    def show_pause_popup(self):
+        content = FloatLayout()
+        content.add_widget(Label(text="PAUSED", bold=True, font_size=sp(22), color=TEXT,
+                                  size_hint=(1, None), height=dp(40),
+                                  pos_hint={"center_x": 0.5, "top": 0.92}))
+        resume_btn = PillButton(text="RESUME", bold=True, font_size=sp(30),
+                                 fill_color=GOLD, color=(0, 0, 0, 1),
+                                 size_hint=(0.75, 0.42),
+                                 pos_hint={"center_x": 0.5, "center_y": 0.48})
+        content.add_widget(resume_btn)
+
+        self._pause_popup = Popup(title="", content=content, size_hint=(0.78, 0.55),
+                                   auto_dismiss=False, separator_height=0,
+                                   background_color=(0.04, 0.05, 0.08, 0.94))
+
+        def _resume(*_):
+            self._pause_popup.dismiss()
+            self._pause_popup = None
+            self.start_timer()
+
+        resume_btn.bind(on_release=_resume)
+        self._pause_popup.open()
+
+        # gentle pop-in feel
+        resume_btn.opacity = 0
+        Animation(opacity=1, duration=0.18).start(resume_btn)
+
+    # ---------------------------------------------------------- timer
+    def start_timer(self):
+        if self.match_over or self.timer_running:
+            return
+        self.timer_running = True
+        self.set_ui_state("running")
+        self.timer_ev = Clock.schedule_interval(self.tick, 1)
+
+    def pause_timer(self):
+        self.timer_running = False
+        if self.timer_ev:
+            self.timer_ev.cancel()
+            self.timer_ev = None
+
+    def tick(self, dt):
+        if not self.timer_running:
+            return False
+        if self.time_left <= 0:
+            self.timer_running = False
+            self._play(self.timeup_sound)
+            self.end_round()
+            return False
+        self.update_timer_label()
+        self.time_left -= 1
+
+    def update_timer_label(self):
+        mins, secs = divmod(self.time_left, 60)
+        self.center.timer_lbl.text = f"{mins:02d}:{secs:02d}"
+
+    # ---------------------------------------------------------- rounds
+    def end_round(self):
+        if self.match_over:
+            return
+        self.pause_timer()
+        round_a, round_b = self.score["A"], self.score["B"]
+        self.round_scores["A"].append(round_a)
+        self.round_scores["B"].append(round_b)
+        total_a = sum(self.round_scores["A"])
+        total_b = sum(self.round_scores["B"])
+        self.show_round_over_popup(self.round_no, round_a, round_b, total_a, total_b)
+
+    def show_round_over_popup(self, round_no, round_a, round_b, total_a, total_b):
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(20))
+        content.add_widget(Label(text=f"ROUND {round_no} COMPLETE", bold=True, font_size=sp(26),
+                                  color=GOLD, size_hint=(1, None), height=dp(40)))
+        row = BoxLayout(spacing=dp(30), size_hint=(1, None), height=dp(110))
+        col_a = BoxLayout(orientation="vertical")
+        col_a.add_widget(Label(text="PLAYER A (Red)", bold=True, font_size=sp(15), color=RED))
+        col_a.add_widget(Label(text=str(round_a), bold=True, font_size=sp(46), color=TEXT))
+        col_b = BoxLayout(orientation="vertical")
+        col_b.add_widget(Label(text="PLAYER B (Blue)", bold=True, font_size=sp(15), color=BLUE))
+        col_b.add_widget(Label(text=str(round_b), bold=True, font_size=sp(46), color=TEXT))
+        row.add_widget(col_a)
+        row.add_widget(col_b)
+        content.add_widget(row)
+        content.add_widget(Label(text=f"Match total so far:  A {total_a}   -   B {total_b}",
+                                  font_size=sp(13), color=MUTED, size_hint=(1, None), height=dp(24)))
+
+        popup = Popup(title="", content=content, size_hint=(0.7, 0.6), auto_dismiss=False,
+                       background_color=CARD_BG, separator_height=0)
+
+        def cont(*_):
+            popup.dismiss()
+            self._proceed_after_round(total_a, total_b)
+
+        cont_btn = PillButton(text="Continue", bold=True, font_size=sp(16),
+                               fill_color=GOLD, color=(0, 0, 0, 1),
+                               size_hint=(1, None), height=dp(50))
+        cont_btn.bind(on_release=cont)
+        content.add_widget(cont_btn)
+        popup.open()
+
+    def _proceed_after_round(self, total_a, total_b):
+        if self.round_no >= MAX_ROUNDS_NORMAL:
+            if total_a == total_b and self.round_no < DECIDER_ROUND:
+                self.show_message("Scores Tied", "Round 3 (decider round) will start now.",
+                                   on_close=self.next_round)
+            else:
+                self.declare_winner(total_a, total_b)
+        else:
+            self.next_round()
+
+    def next_round(self):
+        self.round_no += 1
+        self.center.round_lbl.text = f"ROUND {self.round_no}"
+        self.time_left = self.round_seconds
+        self.score = {"A": 0, "B": 0}
+        self.penalties = {"A": 0, "B": 0}
+        self.panel_a.set_penalties(0)
+        self.panel_b.set_penalties(0)
+        self.refresh_scores()
+        self.update_timer_label()
+        # show players so the board is visible behind the announcement,
+        # then auto-start - no need to press START again
+        self.panel_a.opacity = 1
+        self.panel_b.opacity = 1
+        self.center.primary_btn.opacity = 0
+        self.center.primary_btn.disabled = True
+        self.center.controls.opacity = 1
+        self.center.controls.disabled = False
+        self.show_round_start_popup()
+
+    def show_round_start_popup(self):
+        content = BoxLayout(orientation="vertical", padding=dp(20))
+        content.add_widget(Label(text=f"ROUND {self.round_no}", bold=True, font_size=sp(36),
+                                  color=GOLD))
+        content.add_widget(Label(text="Get ready...", font_size=sp(14), color=MUTED,
+                                  size_hint=(1, None), height=dp(24)))
+        popup = Popup(title="", content=content, size_hint=(0.6, 0.38), auto_dismiss=False,
+                       background_color=CARD_BG, separator_height=0)
+        popup.open()
+
+        def _go(dt):
+            popup.dismiss()
+            self.start_timer()
+
+        Clock.schedule_once(_go, ROUND_START_POPUP_SECONDS)
+
+    def new_match(self):
+        self.pause_timer()
+        self.round_no = 1
+        self.center.round_lbl.text = f"ROUND {self.round_no}"
+        self.time_left = self.round_seconds
+        self.score = {"A": 0, "B": 0}
+        self.penalties = {"A": 0, "B": 0}
+        self.panel_a.set_penalties(0)
+        self.panel_b.set_penalties(0)
+        self.round_scores = {"A": [], "B": []}
+        self.match_over = False
+        self.refresh_scores()
+        self.update_timer_label()
+        self.set_ui_state("idle")
+
+    # ---------------------------------------------------------- winner
+    def declare_winner(self, total_a, total_b):
+        self.match_over = True
+        if total_a > total_b:
+            self.show_winner_popup("PLAYER A", "Red", RED, total_a, total_b)
+        elif total_b > total_a:
+            self.show_winner_popup("PLAYER B", "Blue", BLUE, total_b, total_a)
+        else:
+            self.show_winner_popup("TIE", "", GOLD, total_a, total_b, tie=True)
+
+    def show_winner_popup(self, name, color_word, color, win_score, other_score, tie=False):
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(20))
+        heading = "MATCH TIED" if tie else "WINNER"
+        content.add_widget(Label(text=heading, bold=True, font_size=sp(18), color=MUTED,
+                                  size_hint=(1, None), height=dp(30)))
+        if not tie:
+            content.add_widget(Label(text=name, bold=True, font_size=sp(40), color=color,
+                                      size_hint=(1, None), height=dp(56)))
+            content.add_widget(Label(text=color_word.upper(), bold=True, font_size=sp(15), color=MUTED,
+                                      size_hint=(1, None), height=dp(22)))
+        else:
+            content.add_widget(Label(text="Great match, both equal!", font_size=sp(16), color=TEXT,
+                                      size_hint=(1, None), height=dp(30)))
+        content.add_widget(Label(text=f"Final Score:  {win_score}  -  {other_score}", bold=True,
+                                  font_size=sp(20), color=TEXT, size_hint=(1, None), height=dp(30)))
+
+        popup = Popup(title="", content=content, size_hint=(0.75, 0.65), auto_dismiss=False,
+                       background_color=CARD_BG, separator_height=0)
+
+        def again(*_):
+            popup.dismiss()
+            self.new_match()
+
+        again_btn = PillButton(text="Play Again", bold=True, font_size=sp(16),
+                                fill_color=GOLD, color=(0, 0, 0, 1),
+                                size_hint=(1, None), height=dp(50))
+        again_btn.bind(on_release=again)
+        content.add_widget(again_btn)
+        popup.open()
+
+    def show_message(self, title, msg, on_close=None):
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(20))
+        content.add_widget(Label(text=title, bold=True, font_size=sp(18), color=GOLD,
+                                  size_hint=(1, None), height=dp(30)))
+        content.add_widget(Label(text=msg, font_size=sp(13), color=TEXT))
+        popup = Popup(title="", content=content, size_hint=(0.6, 0.4), auto_dismiss=False,
+                       background_color=CARD_BG, separator_height=0)
+
+        def close(*_):
+            popup.dismiss()
+            if on_close:
+                on_close()
+
+        ok_btn = PillButton(text="OK", bold=True, font_size=sp(14),
+                             fill_color=GOLD, color=(0, 0, 0, 1),
+                             size_hint=(1, None), height=dp(46))
+        ok_btn.bind(on_release=close)
+        content.add_widget(ok_btn)
+        popup.open()
+
+    # ---------------------------------------------------------- settings
+    def open_settings(self):
+        content = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(20))
+        content.add_widget(Label(text="Round duration (seconds)", font_size=sp(14), color=TEXT,
+                                  size_hint=(1, None), height=dp(28)))
+        ti = TextInput(text=str(self.round_seconds), multiline=False, input_filter="int",
+                        font_size=sp(16), size_hint=(1, None), height=dp(44))
+        content.add_widget(ti)
+
+        popup = Popup(title="", content=content, size_hint=(0.55, 0.35), auto_dismiss=True,
+                       background_color=CARD_BG, separator_height=0)
+
+        def save(*_):
+            try:
+                t = int(ti.text)
+                if t >= 5:
+                    self.round_seconds = t
+                    self.time_left = t
+                    self.update_timer_label()
+            except ValueError:
+                pass
+            popup.dismiss()
+
+        save_btn = PillButton(text="Save", bold=True, font_size=sp(14),
+                               fill_color=GOLD, color=(0, 0, 0, 1),
+                               size_hint=(1, None), height=dp(44))
+        save_btn.bind(on_release=save)
+        content.add_widget(save_btn)
+        popup.open()
+
+    # ---------------------------------------------------------- ESP32 (WiFi/TCP)
+    def start_esp32_server(self):
+        try:
+            my_ip = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            my_ip = "unknown"
+        self.center.net_lbl.text = f"ESP32 server: {my_ip}:{SERVER_PORT} (waiting...)"
+        threading.Thread(target=self._server_loop, daemon=True).start()
+
+    def _server_loop(self):
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server_sock.bind(("0.0.0.0", SERVER_PORT))
+            server_sock.listen(5)
+        except Exception as e:
+            self.esp_queue.put(("ERROR", str(e)))
+            return
+        while True:
+            client_sock, addr = server_sock.accept()
+            self.esp_queue.put(("CONNECTED", addr[0]))
+            threading.Thread(target=self._handle_client, args=(client_sock, addr), daemon=True).start()
+
+    def _handle_client(self, client_sock, addr):
+        buffer = ""
+        with client_sock:
+            while True:
+                try:
+                    data = client_sock.recv(1024)
+                except Exception:
+                    break
+                if not data:
+                    break
+                buffer += data.decode(errors="ignore")
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if line:
+                        self.esp_queue.put(("MSG", line))
+        self.esp_queue.put(("DISCONNECTED", addr[0]))
+
+    def poll_esp32_queue(self, dt):
+        try:
+            while True:
+                kind, payload = self.esp_queue.get_nowait()
+                if kind == "CONNECTED":
+                    self.connected_devices += 1
+                    self.center.net_lbl.text = f"ESP32 connected: {payload} (online: {self.connected_devices})"
+                elif kind == "DISCONNECTED":
+                    self.connected_devices = max(0, self.connected_devices - 1)
+                    self.center.net_lbl.text = f"ESP32 disconnected (online: {self.connected_devices})"
+                elif kind == "ERROR":
+                    self.center.net_lbl.text = f"Server error: {payload}"
+                elif kind == "MSG":
+                    self._process_esp_message(payload)
+        except queue.Empty:
+            pass
+
+    def _process_esp_message(self, line):
+        line = line.upper()
+        if ":" not in line:
+            return
+        player, action = [x.strip() for x in line.split(":", 1)]
+        if player not in ("A", "B"):
+            return
+        if action == "HIT":
+            self.register_hit(player)
+        elif action == "PENALTY":
+            self.register_penalty(player)
+
+
+if __name__ == "__main__":
+    SilambamApp().run()
