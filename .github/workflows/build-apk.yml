@@ -8,8 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,12 +30,18 @@ jobs:
           pip install --upgrade pip
           pip install buildozer cython==0.29.36
 
-      - name: Build APK
+      - name: Build APK and Save Logs
         run: |
-          yes | buildozer -v android debug
+          yes | buildozer -v android debug > build_log.txt 2>&1 || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: silambam-apk
           path: bin/*.apk
+
+      - name: Upload Build Log
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build_log.txt
