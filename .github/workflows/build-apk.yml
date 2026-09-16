@@ -30,10 +30,25 @@ jobs:
         pip install --upgrade pip
         pip install buildozer==1.5.0 cython==0.29.36
 
-    - name: Clear old buildozer cache and state
+    - name: Setup Android SDK and Build Tools
       run: |
+        # Create standard Android SDK directories
+        mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools
+        
+        # Download and set up Android command-line tools if not present
+        if [ ! -d "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest" ]; then
+          curl -o commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip -q commandlinetools.zip
+          mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest
+          mv cmdline-tools/* ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/
+          rm commandlinetools.zip
+        fi
+
+        # Clear 37 tools block
         rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/37*
         mkdir -p ~/.buildozer/android/platform/android-sdk/build-tools/37.0.0
+
+        # Accept licenses
         mkdir -p ~/.android
         echo "### License accepted by buildozer" > ~/.android/repositories.cfg
         export ACCEPT_LICENSE="yes"
