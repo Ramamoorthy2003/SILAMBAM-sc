@@ -29,24 +29,30 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y git zip unzip python3-pip \
           autoconf libtool pkg-config zlib1g-dev libncurses5-dev \
-          libncursesw5-dev cmake libffi-dev libssl-dev
+          libncursesw5-dev cmake libffi-dev libssl-dev lld
 
     - name: Install buildozer and cython
       run: |
         pip install --upgrade pip
         pip install buildozer==1.5.0 cython==0.29.36
 
-    - name: Setup Environment Variables for SDK/NDK
+    - name: Setup Environment Variables & SDK Licenses
       run: |
+        # Java path set panrom
         echo "JAVA_HOME=$JAVA_HOME_17_X64" >> $GITHUB_ENV
-        echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-        echo "ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/25.3.13750724" >> $GITHUB_ENV
         
-        # Accept Android SDK licenses automatically
-        mkdir -p /usr/local/lib/android/sdk/licenses
-        echo "24333f8a63b6825ea3c5554f817596b4f8d3d923" > /usr/local/lib/android/sdk/licenses/android-sdk-license
-        echo "84831b9409646a918e30573bab4c9c91346d8abd" >> /usr/local/lib/android/sdk/licenses/android-sdk-license
+        # Buildozer sariyana default path-ah use panna ungaloda home directory-kula irukkura .buildozer path-ah kudukalam
+        # Athu moolama automated-a download aagura tools & licenses strict-a apply aagum
+        SDK_DIR="/home/runner/.buildozer/android/platform/android-sdk"
+        mkdir -p $SDK_DIR/licenses
+        
+        echo "ANDROID_HOME=$SDK_DIR" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$SDK_DIR" >> $GITHUB_ENV
+        
+        # Android SDK Licenses-ah pre-accept panrom (iduthan ungaloda error-ah fix pannum)
+        echo "24333f8a63b6825ea9c5514f83c2829b004d1fb8" > $SDK_DIR/licenses/android-sdk-license
+        echo "d56f5187479451eabf01fb78af6dfcb131a648ab" >> $SDK_DIR/licenses/android-sdk-license
+        echo "84831b9409646a918e30573bab4c9c91346d8abd" > $SDK_DIR/licenses/android-sdk-preview-license
 
     - name: Build APK and Save Logs
       run: |
@@ -54,7 +60,9 @@ jobs:
         export PATH="$JAVA_HOME/bin:$PATH"
         
         buildozer --version
-        buildozer -v android debug > build_log.txt 2>&1 || true
+        
+        # Build panravan pothu error vanthalum log file-ku output-ah save panra mari set panrom
+        buildozer -v android debug > build_log.txt 2>&1 || { cat build_log.txt; exit 1; }
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
@@ -63,6 +71,7 @@ jobs:
         path: bin/*.apk
 
     - name: Upload Build Log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: build-logs
