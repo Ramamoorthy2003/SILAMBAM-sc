@@ -4,7 +4,7 @@
 title = Electronic Silambam
 
 # (str) Package name
-package_name = silambam
+package.name = silambam
 
 # (str) Package domain (needed for android packaging)
 package_domain = org.silambam
