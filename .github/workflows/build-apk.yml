@@ -40,7 +40,7 @@ jobs:
       - name: Build APK and Save Logs
         run: |
           buildozer --version
-          buildozer -v android debug || true
+          buildozer -v android debug > build_log.txt 2>&1 || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
