@@ -49,14 +49,14 @@ jobs:
         rm -rf ~/.buildozer/android/platform/android-sdk/tools/bin
         ln -s ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin ~/.buildozer/android/platform/android-sdk/tools/bin
 
-        # Clear 37 tools block
+        # Explicitly accept licenses and install build-tools 33.0.0 and platform-tools using sdkmanager
+        export PATH="$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin:$PATH"
+        yes | sdkmanager --licenses || true
+        sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.0"
+
+        # Clear 37 tools block just in case
         rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/37*
         mkdir -p ~/.buildozer/android/platform/android-sdk/build-tools/37.0.0
-
-        # Accept licenses
-        mkdir -p ~/.android
-        echo "### License accepted by buildozer" > ~/.android/repositories.cfg
-        export ACCEPT_LICENSE="yes"
 
     - name: Build APK and Save Logs
       run: |
