@@ -36,42 +36,23 @@ jobs:
         pip install --upgrade pip
         pip install buildozer==1.5.0 cython==0.29.36
 
-    - name: Setup Android SDK and Build Tools
+    - name: Setup Environment Variables for SDK/NDK
       run: |
-        # Export correct Java home globally for this step
-        export JAVA_HOME=$JAVA_HOME_17_X64
-        export PATH="$JAVA_HOME/bin:$PATH"
+        echo "JAVA_HOME=$JAVA_HOME_17_X64" >> $GITHUB_ENV
+        echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+        echo "ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/25.3.13750724" >> $GITHUB_ENV
         
-        # Create standard Android SDK directories
-        mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools
-        mkdir -p ~/.buildozer/android/platform/android-sdk/tools
-        
-        # Download and set up Android command-line tools if not present
-        if [ ! -d "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest" ]; then
-          curl -o commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          unzip -q commandlinetools.zip
-          mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest
-          mv cmdline-tools/* ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/
-          rm commandlinetools.zip
-        fi
-
-        # Create symlink for buildozer to find sdkmanager in old path
-        rm -rf ~/.buildozer/android/platform/android-sdk/tools/bin
-        ln -s ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin ~/.buildozer/android/platform/android-sdk/tools/bin
-
-        # Explicitly accept licenses and install build-tools 33.0.0 and platform-tools using sdkmanager
-        export PATH="$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin:$PATH"
-        yes | sdkmanager --licenses || true
-        sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.0"
-
-        # Clear 37 tools block just in case
-        rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/37*
-        mkdir -p ~/.buildozer/android/platform/android-sdk/build-tools/37.0.0
+        # Accept Android SDK licenses automatically
+        mkdir -p /usr/local/lib/android/sdk/licenses
+        echo "24333f8a63b6825ea3c5554f817596b4f8d3d923" > /usr/local/lib/android/sdk/licenses/android-sdk-license
+        echo "84831b9409646a918e30573bab4c9c91346d8abd" >> /usr/local/lib/android/sdk/licenses/android-sdk-license
 
     - name: Build APK and Save Logs
       run: |
         export JAVA_HOME=$JAVA_HOME_17_X64
         export PATH="$JAVA_HOME/bin:$PATH"
+        
         buildozer --version
         buildozer -v android debug > build_log.txt 2>&1 || true
 
