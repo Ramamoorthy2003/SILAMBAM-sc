@@ -38,8 +38,9 @@ jobs:
 
     - name: Setup Android SDK and Build Tools
       run: |
-        # Force Java 17 for sdkmanager
-        export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+        # Export correct Java home globally for this step
+        export JAVA_HOME=$JAVA_HOME_17_X64
+        export PATH="$JAVA_HOME/bin:$PATH"
         
         # Create standard Android SDK directories
         mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools
@@ -69,7 +70,8 @@ jobs:
 
     - name: Build APK and Save Logs
       run: |
-        export JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+        export JAVA_HOME=$JAVA_HOME_17_X64
+        export PATH="$JAVA_HOME/bin:$PATH"
         buildozer --version
         buildozer -v android debug > build_log.txt 2>&1 || true
 
