@@ -10,46 +10,47 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip \
-            autoconf libtool pkg-config zlib1g-dev libncurses5-dev \
-            libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip \
+          autoconf libtool pkg-config zlib1g-dev libncurses5-dev \
+          libncursesw5-dev libinfo5 cmake libffi-dev libssl-dev
 
-      - name: Install buildozer and cython
-        run: |
-          pip install --upgrade pip
-          pip install buildozer==1.5.0 cython==0.29.36
+    - name: Install buildozer and cython
+      run: |
+        pip install --upgrade pip
+        pip install buildozer==1.5.0 cython==0.29.36
 
-      - name: Clear old buildozer cache and state
-        run: |
-          rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/37*
-          mkdir -p ~/.android
-          echo "### License accepted by buildozer" > ~/.android/repositories.cfg
-          export ACCEPT_LICENSE="yes"
+    - name: Clear old buildozer cache and state
+      run: |
+        rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/37*
+        mkdir -p ~/.buildozer/android/platform/android-sdk/build-tools/37.0.0
+        mkdir -p ~/.android
+        echo "### License accepted by buildozer" > ~/.android/repositories.cfg
+        export ACCEPT_LICENSE="yes"
 
-      - name: Build APK and Save Logs
-        run: |
-          buildozer --version
-          buildozer -v android debug > build_log.txt 2>&1 || true
+    - name: Build APK and Save Logs
+      run: |
+        buildozer --version
+        buildozer -v android debug > build_log.txt 2>&1 || true
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: silambam-apk
-          path: bin/*.apk
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: silambam-apk
+        path: bin/*.apk
 
-      - name: Upload Build Log
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: build_log.txt
+    - name: Upload Build Log
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: build_log.txt
