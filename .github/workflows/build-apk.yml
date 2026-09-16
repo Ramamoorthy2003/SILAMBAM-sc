@@ -39,7 +39,7 @@ jobs:
 
     - name: Setup Android SDK, Command-line Tools & Licenses (Fix)
       run: |
-        SDK_DIR="/home/runner/.buildozer/android/platform/android-sdk"
+        SDK_DIR="/home/runner/buildozer/android/platform/android-sdk"
         mkdir -p $SDK_DIR/licenses
         
         # 1. Pre-accept Android SDK Licenses
@@ -62,6 +62,11 @@ jobs:
         
         # Cleanup temporary zip
         rm -rf cmdtools.zip temp_tools
+
+    - name: Set Environment Variables for Buildozer
+      run: |
+        echo "ANDROIDSDK=/home/runner/buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+        echo "ANDROIDNDK=/home/runner/buildozer/android/platform/android-ndk-r25b" >> $GITHUB_ENV
 
     - name: Build APK and Save Logs
       run: |
