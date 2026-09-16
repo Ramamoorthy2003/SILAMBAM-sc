@@ -34,6 +34,7 @@ jobs:
       run: |
         # Create standard Android SDK directories
         mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools
+        mkdir -p ~/.buildozer/android/platform/android-sdk/tools
         
         # Download and set up Android command-line tools if not present
         if [ ! -d "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest" ]; then
@@ -43,6 +44,10 @@ jobs:
           mv cmdline-tools/* ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/
           rm commandlinetools.zip
         fi
+
+        # Create symlink for buildozer to find sdkmanager in old path
+        rm -rf ~/.buildozer/android/platform/android-sdk/tools/bin
+        ln -s ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin ~/.buildozer/android/platform/android-sdk/tools/bin
 
         # Clear 37 tools block
         rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/37*
