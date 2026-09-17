@@ -41,7 +41,7 @@ jobs:
       run: |
         SDK_DIR="/home/runner/buildozer/android/platform/android-sdk"
         mkdir -p $SDK_DIR/licenses
-        
+
         # 1. Pre-accept Android SDK Licenses
         echo "24333f8a63b6825ea9c5514f83c2829b004d1fb8" > $SDK_DIR/licenses/android-sdk-license
         echo "d56f5187479451eabf01fb78af6dfcb131a648ab" >> $SDK_DIR/licenses/android-sdk-license
@@ -52,14 +52,13 @@ jobs:
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdtools.zip
         mkdir -p temp_tools
         unzip -q cmdtools.zip -d temp_tools
-        
         mkdir -p $SDK_DIR/cmdline-tools/latest
         cp -r temp_tools/cmdline-tools/* $SDK_DIR/cmdline-tools/latest/
-        
+
         # 3. Create the legacy tools/bin path expected by python-for-android
         mkdir -p $SDK_DIR/tools/bin
         ln -sf $SDK_DIR/cmdline-tools/latest/bin/sdkmanager $SDK_DIR/tools/bin/sdkmanager
-        
+
         # Cleanup temporary zip
         rm -rf cmdtools.zip temp_tools
 
@@ -70,9 +69,8 @@ jobs:
 
     - name: Build APK and Save Logs
       run: |
-        export JAVA_HOME=$JAVA_HOME_17_X64
+        export JAVA_HOME=$JAVA_HOME
         export PATH="$JAVA_HOME/bin:$PATH"
-        
         buildozer --version
         
         # Build panravan pothu error vanthalum log file-ku output-ah save panra mari set panrom
