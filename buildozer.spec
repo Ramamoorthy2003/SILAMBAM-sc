@@ -44,7 +44,7 @@ android.ndk = 25b
 android.build_tools_version = 33.0.0
 
 # (list) Supported architectures
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 
 # (bool) If True, then skip trying to update the android sdk
 android.skip_update = False
