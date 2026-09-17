@@ -19,14 +19,14 @@ source.include_exts = py,png,jpg,kv,atlas,wav
 version = 1.0
 
 # (list) Application requirements
-# comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy
+# Cython 3.x compilation error-ஐ தடுக்க cython==0.29.33 சேர்க்கப்பட்டுள்ளது
+requirements = python3,kivy==2.2.1,cython==0.29.33
 
 # (str) Customized icon, any
-#icon.filename = %(source.dir)s/data/icon.png
+# icon.filename = %(source.dir)s/data/icon.png
 
 # (str) Customized splash screen, any
-#presplash.filename = %(source.dir)s/data/presplash.png
+# presplash.filename = %(source.dir)s/data/presplash.png
 
 # (list) Permissions
 android.permissions = INTERNET
@@ -47,7 +47,6 @@ android.build_tools_version = 33.0.0
 android.archs = arm64-v8a, armeabi-v7a
 
 # (bool) If True, then skip trying to update the android sdk
-# This can be useful to avoid interactive prompts during builds
 android.skip_update = False
 
 # (bool) Automatically accept Android SDK license to fix CI/CD and GitHub Actions build errors
