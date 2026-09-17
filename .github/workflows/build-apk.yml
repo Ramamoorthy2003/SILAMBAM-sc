@@ -34,9 +34,7 @@ jobs:
     - name: Install buildozer and dependencies
       run: |
         pip install --upgrade pip
-        pip install --upgrade buildozer
-        pip install "cython<3.0.0"
-        pip install "python-for-android==2024.1.2"
+        pip install buildozer cython=="0.29.33" python-for-android
 
     - name: Setup Android SDK, Command-line Tools & Licenses
       run: |
