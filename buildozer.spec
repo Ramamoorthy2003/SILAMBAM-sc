@@ -20,8 +20,7 @@ version = 1.0
 
 # (list) Application requirements
 # Cython 3.x compilation error-ஐ தடுக்க cython==0.29.33 சேர்க்கப்பட்டுள்ளது
-requirements = python3,kivy==2.2.1,cython==0.29.33
-
+requirements = python3==3.11.0,kivy==2.2.1,cython==0.29.33
 # (str) Customized icon, any
 # icon.filename = %(source.dir)s/data/icon.png
 
